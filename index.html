@@ -505,7 +505,9 @@ body[style*="cursor: col-resize"] .resizer {
   white-space: pre-wrap !important;
   overflow-wrap: break-word !important;
   word-break: break-all !important;
-  max-width: var(--wrap-width) !important;
+  width: var(--wrap-width) !important;
+  max-width: 100% !important;
+  flex: 0 1 var(--wrap-width) !important;
 }
 .image-viewer-container {
   position: absolute;
@@ -789,11 +791,16 @@ body[style*="cursor: col-resize"] .resizer {
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: break-all;
+  width: var(--wrap-width);
+  max-width: 100%;
 }
 #code-editor.wrap-on {
   white-space: pre-wrap !important;
   overflow-wrap: break-word !important;
   word-break: break-all !important;
+  width: var(--wrap-width) !important;
+  max-width: 100% !important;
+  flex: 0 1 var(--wrap-width) !important;
 }
 
 .workspace-root-header {
@@ -913,6 +920,14 @@ body[style*="cursor: col-resize"] .resizer {
   width: 100% !important;
   box-sizing: border-box;
 }
+#syntax-highlight.wrap-on {
+  max-width: 100% !important;
+  width: var(--wrap-width) !important;
+}
+#code-editor.wrap-on {
+  max-width: 100% !important;
+  width: var(--wrap-width) !important;
+}
 .preview-header {
   display: flex;
   align-items: center;
@@ -978,13 +993,13 @@ textarea {
   <head>
     <meta charset="utf-8" />
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-    <title>Chromebook Local Editor v2.8.6</title>
+    <title>Chromebook Local Editor v2.8.8</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body data-theme="dark">
     <header class="header-bar">
       <div class="header-left">
-        <span class="logo">CB Editor <span class="version">v2.8.6</span></span>
+        <span class="logo">CB Editor <span class="version">v2.8.8</span></span>
         <div class="menu-container">
           <button class="menu-btn" id="menu-btn-file">ファイル</button>
           <div class="dropdown-content" id="dropdown-file">
@@ -2067,11 +2082,7 @@ function renderDiagnostics(diagnostics) {
         activeDiagnostics.filter((d) => d.line > 0).map((d) => d.line),
     );
     lineNumbersWrapper.innerHTML = "";
-    const total = Math.max(1, editor.value.split("\n").length);
-    let arr = [];
-    for (let i = 1; i <= total; i++)
-        arr.push(lines.has(i) ? `<span class="line-error">${i}</span>` : `${i}`);
-    lineNumbersWrapper.innerHTML = arr.join("\n");
+    lineNumbersWrapper.innerHTML = buildLineNumbers(lines);
     if (!diagnosticsPanel) return;
     if (!activeDiagnostics.length) {
         diagnosticsPanel.style.display = "none";
@@ -2099,13 +2110,52 @@ function updateEditorVisuals() {
     runDiagnostics();
 }
 function updateLineNumbersBase() {
-    const lines = editor.value.split("\n");
     if (activeDiagnostics.length) {
         renderDiagnostics(activeDiagnostics);
         return;
     }
-    lineNumbersWrapper.textContent = lines.map((_, i) => i + 1).join("\n");
+    lineNumbersWrapper.innerHTML = buildLineNumbers();
     lineNumbersWrapper.scrollTop = editor.scrollTop;
+}
+function getWrappedLineCount(line) {
+    if (!wrapEnabled) return 1;
+    const limit = Math.max(1, Number(maxWrapLength) || 80);
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    context.font = getComputedStyle(editor).font;
+    const unitWidth = context.measureText("0").width;
+    const targetWidth =
+        wrapLengthUnit === "half"
+            ? limit * unitWidth
+            : limit * context.measureText("あ").width;
+    let width = 0;
+    let rows = 1;
+    for (const character of line) {
+        const characterWidth = character === "\t"
+            ? unitWidth * 4
+            : context.measureText(character).width;
+        width += characterWidth;
+        if (width > targetWidth) {
+            rows++;
+            width = characterWidth;
+        }
+    }
+    return rows;
+}
+function buildLineNumbers(errorLines = new Set()) {
+    const sourceLines = editor.value.split("\n");
+    const displayLines = [];
+    sourceLines.forEach((line, index) => {
+        const lineNumber = index + 1;
+        displayLines.push(
+            errorLines.has(lineNumber)
+                ? `<span class="line-error">${lineNumber}</span>`
+                : `${lineNumber}`,
+        );
+        for (let row = 1; row < getWrappedLineCount(line); row++)
+            displayLines.push("");
+    });
+    return displayLines.join("\n");
 }
 function updateLineNumbers() {
     updateLineNumbersBase();
@@ -2123,8 +2173,9 @@ editor.addEventListener("scroll", syncEditorScroll);
 function applyWrapStyles() {
     editor.classList.toggle("wrap-on", wrapEnabled);
     syntaxHighlight.classList.toggle("wrap-on", wrapEnabled);
+    const limit = Math.max(1, Number(maxWrapLength) || 80);
     const width = wrapEnabled
-        ? `${Math.max(1, Number(maxWrapLength) || 80)}${wrapLengthUnit === "half" ? "ch" : "em"}`
+        ? `calc(${limit}${wrapLengthUnit === "half" ? "ch" : "em"} + 24px)`
         : "";
     editor.style.setProperty("--wrap-width", width || "none");
     syntaxHighlight.style.setProperty("--wrap-width", width || "none");
@@ -2758,7 +2809,7 @@ Markdownでは見出し、太字、斜体、リンク、リスト、引用、コ
 - 新規ファイル: **Ctrl+N**
 - 名前変更: **F2**
 
-## v2.8.6 update report
+## v2.8.8 update report
 
 ### Markdown preview
 
