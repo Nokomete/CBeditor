@@ -132,6 +132,21 @@ body {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
+.action-btn svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+.code-runner-frame {
+  position: fixed;
+  width: 0;
+  height: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 .help-btn {
   color: #9cdcfe;
 }
@@ -591,9 +606,10 @@ body[style*="cursor: col-resize"] .resizer {
 }
 .preview-console {
   display: none;
-  flex: 0 0 280px;
+  width: 280px;
   min-width: 160px;
   max-width: 60%;
+  flex-shrink: 0;
   flex-direction: column;
   background: #181818;
   color: #d4d4d4;
@@ -657,6 +673,14 @@ body[style*="cursor: col-resize"] .preview-console-resizer {
   border: none;
   background-color: #ffffff;
   pointer-events: auto;
+}
+
+/* ダークモード時、iframeの再読み込み中も白くならないようにする */
+[data-theme="dark"] #preview-frame {
+  background-color: #1e1e1e;
+}
+.plain-text-preview {
+  white-space: pre-wrap;
 }
 .terminal-panel {
   display: none;
