@@ -1,5 +1,5 @@
 // CB Editor version: update this value when releasing a new version.
-const APP_VERSION = "2.8.19";
+const APP_VERSION = "2.8.20";
 
 let tabs = [];
 let activeTabId = null;
@@ -22,6 +22,7 @@ let statusTimer = null;
 let initialUntitledTabId = null;
 let previewUpdateToken = 0;
 let previewUpdateTimer = null;
+let previewDocumentPath = "";
 let localAssetUrlCache = new WeakMap();
 let localAssetObjectUrls = new Set();
 let localScriptUrlCache = new WeakMap();
@@ -929,8 +930,12 @@ function executeTerminalCommand(command) {
 window.addEventListener("message", (event) => {
     if (event.source !== previewFrame.contentWindow) return;
     const data = event.data;
-    if (!data || data.source !== "cb-preview-console") return;
-    appendPreviewConsoleEntry(data.level || "log", data.args || []);
+    if (!data) return;
+    if (data.source === "cb-preview-console") {
+        appendPreviewConsoleEntry(data.level || "log", data.args || []);
+        return;
+    }
+    if (data.source === "cb-preview-navigation") navigatePreview(data.href);
 });
 
 function sortEntries(entries) {
@@ -1791,15 +1796,39 @@ async function readAllWorkspaceFiles() {
     for (const r of workspaceRoots) await walk(r.handle, "");
     return files;
 }
-function resolveWorkspaceFile(files, src) {
+function normalizeWorkspacePath(path) {
+    const parts = [];
+    for (const part of path.replace(/\\/g, "/").split("/")) {
+        if (!part || part === ".") continue;
+        if (part === "..") parts.pop();
+        else parts.push(part);
+    }
+    return parts.join("/");
+}
+function resolveWorkspaceFileFrom(files, src, basePath = "") {
     if (!src) return null;
-    const clean = decodeURIComponent(src)
-        .split("#")[0]
-        .split("?")[0]
-        .replace(/\\/g, "/")
-        .replace(/^\.\//, "")
-        .replace(/^\/+/, "");
-    return files.get(clean) || files.get(clean.split("/").pop()) || null;
+    let clean;
+    try {
+        clean = decodeURIComponent(src).split("#")[0].split("?")[0];
+    } catch (e) {
+        return null;
+    }
+    const normalized = normalizeWorkspacePath(
+        clean.startsWith("/") ? clean : `${basePath}/${clean}`,
+    );
+    return files.get(normalized) || (normalized.includes("/")
+        ? null
+        : files.get(normalized.split("/").pop()) || null);
+}
+async function getWorkspacePath(files, handle) {
+    if (!handle) return "";
+    for (const [path, candidate] of files) {
+        if (!path.includes("/")) continue;
+        try {
+            if (await candidate.isSameEntry(handle)) return normalizeWorkspacePath(path);
+        } catch (e) { }
+    }
+    return "";
 }
 async function replaceAsync(text, re, repl) {
     const ms = [...text.matchAll(re)];
@@ -1856,7 +1885,8 @@ function injectLocalAssetBridge(html, assets) {
     const serializedAssets = JSON.stringify(assets).replace(/<\//g, "<\\/");
     const previewLayout = `<style id="cb-editor-preview-layout">html,body{width:100%;min-width:0;max-width:100%;overflow-x:hidden}#leftPanel{left:0!important;transform:translateX(0);will-change:transform}#leftPanel.hide{transform:translateX(-100%)!important}#streetViewContainer{margin-left:320px!important;width:calc(100% - 320px)!important;max-width:calc(100% - 320px)!important}#leftPanel.hide~#streetViewContainer{margin-left:0!important;width:100%!important;max-width:100%!important}#panoramaCanvas{width:100%!important;max-width:100%!important;min-width:0!important}</style>`;
     const previewConsoleBridge = `<script>(function(){const stringify=function(value){try{if(typeof value==="string")return value;const result=JSON.stringify(value);return result===undefined?String(value):result;}catch(_){return String(value);}};const send=function(level,args){try{parent.postMessage({source:"cb-preview-console",level:level,args:Array.prototype.map.call(args,stringify)},"*");}catch(_){}};["log","info","warn","error","debug"].forEach(function(level){const original=console[level];console[level]=function(){send(level,arguments);return original.apply(this,arguments);};});window.addEventListener("error",function(event){send("error",[event.message+" ("+event.filename+":"+event.lineno+")"]);});window.addEventListener("unhandledrejection",function(event){send("error",[event.reason&&event.reason.stack||event.reason]);});})();<\\/script>`;
-    const bridge = `${previewLayout}${previewConsoleBridge}<script>(function(){const assets=${serializedAssets};const resolve=function(value){try{if(typeof value!=="string")return value;const key=decodeURIComponent(value).split(/[?#]/)[0].replace(/\\\\/g,"/").replace(/^\\.\\//,"").replace(/^\\/+/,"");return assets[key]||assets["img/panorama/"+key]||assets[key.split("/").pop()]||value;}catch(_){return value;}};const patch=function(){const three=window.THREE;const loader=three&&three.TextureLoader&&three.TextureLoader.prototype;if(loader&&!loader.__cbLocalAssetBridge){const original=loader.load;loader.load=function(url){const resolved=resolve(url);if(resolved===url&&typeof url==="string"&&/^(?:https?:)?\\/\\//i.test(url)){console.warn("CB Editor: ローカルパノラマが見つからないため外部URLを使用します",url);}const args=Array.prototype.slice.call(arguments);args[0]=resolved;return original.apply(this,args);};loader.__cbLocalAssetBridge=true;}if(window.fetch&&!window.__cbFetchBridge){const originalFetch=window.fetch;window.fetch=function(input){const args=Array.prototype.slice.call(arguments);if(typeof input==="string")args[0]=resolve(input);else if(input&&input.url)args[0]=new Request(resolve(input.url),input);return originalFetch.apply(this,args);};window.__cbFetchBridge=true;}const xhr=window.XMLHttpRequest&&XMLHttpRequest.prototype;if(xhr&&!xhr.__cbLocalAssetBridge){const originalOpen=xhr.open;xhr.open=function(method,url){const args=Array.prototype.slice.call(arguments);args[1]=resolve(url);return originalOpen.apply(this,args);};xhr.__cbLocalAssetBridge=true;}const close=document.getElementById("closeLeftPanel");if(close){close.style.pointerEvents="auto";close.style.position="relative";close.style.zIndex="1002";}};patch();window.addEventListener("DOMContentLoaded",patch);window.addEventListener("resize",function(){const canvas=document.getElementById("panoramaCanvas");if(canvas&&typeof window.onWindowResize==="function")window.onWindowResize();});})();<\\/script>`;
+    const navigationBridge = `<script>(function(){document.addEventListener("click",function(event){const link=event.target.closest&&event.target.closest("a[href]");if(!link)return;const href=link.getAttribute("href")||"";if(!href||href.startsWith("#")||/^(?:[a-z][a-z0-9+.-]*:|\\/\\/)/i.test(href))return;event.preventDefault();parent.postMessage({source:"cb-preview-navigation",href:href},"*");});})();<\\/script>`;
+    const bridge = `${previewLayout}${previewConsoleBridge}${navigationBridge}<script>(function(){const assets=${serializedAssets};const resolve=function(value){try{if(typeof value!=="string")return value;const key=decodeURIComponent(value).split(/[?#]/)[0].replace(/\\\\/g,"/").replace(/^\\.\\//,"").replace(/^\\/+/,"");return assets[key]||assets["img/panorama/"+key]||assets[key.split("/").pop()]||value;}catch(_){return value;}};const patch=function(){const three=window.THREE;const loader=three&&three.TextureLoader&&three.TextureLoader.prototype;if(loader&&!loader.__cbLocalAssetBridge){const original=loader.load;loader.load=function(url){const resolved=resolve(url);if(resolved===url&&typeof url==="string"&&/^(?:https?:)?\\/\\//i.test(url)){console.warn("CB Editor: ローカルパノラマが見つからないため外部URLを使用します",url);}const args=Array.prototype.slice.call(arguments);args[0]=resolved;return original.apply(this,args);};loader.__cbLocalAssetBridge=true;}if(window.fetch&&!window.__cbFetchBridge){const originalFetch=window.fetch;window.fetch=function(input){const args=Array.prototype.slice.call(arguments);if(typeof input==="string")args[0]=resolve(input);else if(input&&input.url)args[0]=new Request(resolve(input.url),input);return originalFetch.apply(this,args);};window.__cbFetchBridge=true;}const xhr=window.XMLHttpRequest&&XMLHttpRequest.prototype;if(xhr&&!xhr.__cbLocalAssetBridge){const originalOpen=xhr.open;xhr.open=function(method,url){const args=Array.prototype.slice.call(arguments);args[1]=resolve(url);return originalOpen.apply(this,args);};xhr.__cbLocalAssetBridge=true;}const close=document.getElementById("closeLeftPanel");if(close){close.style.pointerEvents="auto";close.style.position="relative";close.style.zIndex="1002";}};patch();window.addEventListener("DOMContentLoaded",patch);window.addEventListener("resize",function(){const canvas=document.getElementById("panoramaCanvas");if(canvas&&typeof window.onWindowResize==="function")window.onWindowResize();});})();<\\/script>`;
     const scriptClose = "<" + "/script>";
     const safeBridge = bridge.replaceAll("<\\" + "/script>", scriptClose);
     if (/<head\b[^>]*>/i.test(html))
@@ -1866,11 +1896,14 @@ function injectLocalAssetBridge(html, assets) {
 async function buildMergedPreview(handle, source = null) {
     let html = source ?? (await (await handle.getFile()).text());
     const files = await readAllWorkspaceFiles();
+    const filePath = await getWorkspacePath(files, handle);
+    previewDocumentPath = filePath;
+    const basePath = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
     html = await replaceAsync(
         html,
         /<link\b([^>]*?)href=["']([^"']+\.css(?:\?[^"']*)?)["']([^>]*)>/gi,
         async (m) => {
-            const h = resolveWorkspaceFile(files, m[2]);
+            const h = resolveWorkspaceFileFrom(files, m[2], basePath);
             if (!h) return m[0];
             return `<style>${await (await h.getFile()).text()}</style>`;
         },
@@ -1884,7 +1917,7 @@ async function buildMergedPreview(handle, source = null) {
         html,
         localScriptPattern,
         async (m) => {
-            const h = resolveWorkspaceFile(files, m[2]);
+            const h = resolveWorkspaceFileFrom(files, m[2], basePath);
             if (!h) return m[0];
             const deferred = /\bdefer\b/i.test(`${m[1]} ${m[3]}`) ? " defer" : "";
             const scriptUrl = await getLocalScriptUrl(h);
@@ -1895,7 +1928,7 @@ async function buildMergedPreview(handle, source = null) {
         html,
         /<(?:include|sub-html)\b[^>]*src=["']([^"']+)["'][^>]*\/?>/gi,
         async (m) => {
-            const h = resolveWorkspaceFile(files, m[1]);
+            const h = resolveWorkspaceFileFrom(files, m[1], basePath);
             return h ? await (await h.getFile()).text() : m[0];
         },
     );
@@ -1903,7 +1936,7 @@ async function buildMergedPreview(handle, source = null) {
         html,
         /\b(src|poster|href)=["']([^"']+\.(?:png|jpe?g|gif|webp|bmp|ico|svg)(?:[?#][^"']*)?)["']/gi,
         async (m) => {
-            const h = resolveWorkspaceFile(files, m[2]);
+            const h = resolveWorkspaceFileFrom(files, m[2], basePath);
             if (!h) return m[0];
             return `${m[1]}="${await getLocalAssetUrl(h)}"`;
         },
@@ -1912,12 +1945,35 @@ async function buildMergedPreview(handle, source = null) {
         html,
         /url\(["']?([^\)"']+\.(?:png|jpe?g|gif|webp|bmp|ico|svg)(?:[?#][^\)"']*)?)["']?\)/gi,
         async (m) => {
-            const h = resolveWorkspaceFile(files, m[1]);
+            const h = resolveWorkspaceFileFrom(files, m[1], basePath);
             if (!h) return m[0];
             return `url("${await getLocalAssetUrl(h)}")`;
         },
     );
     return injectLocalAssetBridge(html, await buildLocalAssetMap(files));
+}
+async function navigatePreview(href) {
+    if (currentWorkspaceMode !== "project" || !href) return;
+    try {
+        const files = await readAllWorkspaceFiles();
+        const basePath = previewDocumentPath.includes("/")
+            ? previewDocumentPath.slice(0, previewDocumentPath.lastIndexOf("/"))
+            : "";
+        const target = resolveWorkspaceFileFrom(files, href, basePath);
+        if (!target || !/\.(html?|xhtml)$/i.test(target.name)) {
+            previewFrame.srcdoc = `<pre style="padding:10px;color:#d32f2f;white-space:pre-wrap;">リンク先のHTMLファイルが見つかりません: ${escapeHtml(href)}</pre>`;
+            return;
+        }
+        const targetPath = await getWorkspacePath(files, target);
+        const tab = tabs.find((item) => item.handle === target);
+        previewDocumentPath = targetPath;
+        previewFrame.srcdoc = await buildMergedPreview(
+            target,
+            tab && !tab.isImage ? tab.content : null,
+        );
+    } catch (e) {
+        previewFrame.srcdoc = `<pre style="padding:10px;color:#d32f2f;white-space:pre-wrap;">リンク先の読み込みエラー: ${escapeHtml(e.message || String(e))}</pre>`;
+    }
 }
 async function setMainPreview(data) {
     try {
