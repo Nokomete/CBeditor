@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">CB Editor</title>
+  <desc id="desc">A blue code editor window with a local file symbol</desc>
+  <rect width="64" height="64" rx="12" fill="#1e1e1e"/>
+  <rect x="8" y="10" width="48" height="44" rx="5" fill="#252526" stroke="#007acc" stroke-width="3"/>
+  <circle cx="16" cy="18" r="2.5" fill="#f48771"/>
+  <circle cx="24" cy="18" r="2.5" fill="#e5c07b"/>
+  <circle cx="32" cy="18" r="2.5" fill="#98c379"/>
+  <path d="M20 34l-7 6 7 6M44 34l7 6-7 6M37 30l-10 20" fill="none" stroke="#9cdcfe" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+</svg>
