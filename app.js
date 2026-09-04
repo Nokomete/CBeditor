@@ -1,5 +1,5 @@
 // CB Editor version: update this value when releasing a new version.
-const APP_VERSION = "2.8.21";
+const APP_VERSION = "2.8.24";
 
 let tabs = [];
 let activeTabId = null;
@@ -55,6 +55,7 @@ const statusInfo = document.getElementById("status-info");
 const statusCount = document.getElementById("status-count");
 const statusCountAll = document.getElementById("status-count-all");
 const statusMsg = document.getElementById("status-msg");
+const codeRunnerFrame = document.getElementById("code-runner-frame");
 
 document.title = `CBE v${APP_VERSION}`;
 document.querySelectorAll(".version").forEach((element) => {
@@ -753,7 +754,6 @@ function runDiagnostics() {
     renderDiagnostics(validateCode(editor.value, t.name));
 }
 function updateEditorVisuals() {
-    updateLineNumbersBase();
     updateSyntaxHighlight();
     runDiagnostics();
 }
@@ -892,6 +892,58 @@ function appendPreviewConsoleEntry(level, args) {
     previewConsoleOutput.appendChild(entry);
     previewConsoleOutput.scrollTop = previewConsoleOutput.scrollHeight;
 }
+function executeEditorCode() {
+    const tab = tabs.find((item) => item.id === activeTabId);
+    const extension = (tab?.name.split(".").pop() || "").toLowerCase();
+
+    if (!tab || !["js", "mjs", "cjs"].includes(extension)) {
+        showStatusMessage("JavaScriptファイルを開いてください");
+        return;
+    }
+
+    // ターミナルを開く
+    terminalPanel.classList.add("open");
+    document.getElementById("btn-toggle-terminal").classList.add("active");
+
+
+    const source = editor.value.replace(/<\/script/gi, "<\\/script");
+
+    codeRunnerFrame.srcdoc = `<script>
+        (() => {
+            const stringify = (value) => {
+                try {
+                    return typeof value === "string"
+                        ? value
+                        : JSON.stringify(value);
+                } catch (_) {
+                    return String(value);
+                }
+            };
+
+            const send = (level, values) => {
+                parent.postMessage({
+                    source: "cb-code-runner-console",
+                    level,
+                    args: Array.from(values, stringify)
+                }, "*");
+            };
+
+            ["log", "info", "warn", "error"].forEach((level) => {
+                console[level] = (...values) => send(level, values);
+            });
+
+            try {
+                new Function(${JSON.stringify(source)})();
+            } catch (error) {
+                send("error", [
+                    error?.stack || error?.message || String(error)
+                ]);
+            }
+        })();
+    <\/script>`;
+
+    showStatusMessage("JavaScriptを実行しました");
+}
 function appendTerminalLine(text, isError = false) {
     if (!terminalOutput) return;
     const line = document.createElement("div");
@@ -920,19 +972,32 @@ function executeTerminalCommand(command) {
         return;
     }
     if (value === "preview") {
-        previewConsole.classList.add("open");
-        previewConsoleResizer.style.display = "block";
         appendTerminalLine("ライブプレビューの Console を開きました");
         return;
     }
     appendTerminalLine(`コマンドを認識できません: ${value}`, true);
 }
 window.addEventListener("message", (event) => {
-    if (event.source !== previewFrame.contentWindow) return;
+    if (
+        event.source !== previewFrame.contentWindow &&
+        event.source !== codeRunnerFrame.contentWindow
+    )
+        return;
     const data = event.data;
     if (!data) return;
     if (data.source === "cb-preview-console") {
         appendPreviewConsoleEntry(data.level || "log", data.args || []);
+        return;
+    }
+    if (data.source === "cb-code-runner-console") {
+        const level = data.level || "log";
+        const args = data.args || [];
+
+        appendTerminalLine(
+            `[${level}] ${args.join(" ")}`,
+            level === "error"
+        );
+
         return;
     }
     if (data.source === "cb-preview-navigation") navigatePreview(data.href);
@@ -1644,6 +1709,7 @@ async function updatePreview() {
     const updateToken = ++previewUpdateToken;
     if (previewConsoleOutput) previewConsoleOutput.replaceChildren();
     try {
+
         if (
             previewMode === "workspace" &&
             mainPreviewHandle &&
@@ -1668,7 +1734,7 @@ async function updatePreview() {
         else if (!editor.value)
             previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style>`;
         else
-            previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style><pre style="white-space:pre-wrap;">${escapeHtml(editor.value)}</pre>`;
+            previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style><div class="plain-text-preview">${escapeHtml(editor.value)}</div>`;
     } catch (e) {
         if (updateToken !== previewUpdateToken) return;
         previewFrame.srcdoc = `<pre style="padding:10px;color:#d32f2f;white-space:pre-wrap;">ライブプレビュー生成エラー: ${escapeHtml(e.message || String(e))}</pre>`;
@@ -1677,7 +1743,7 @@ async function updatePreview() {
 
 function schedulePreviewUpdate() {
     clearTimeout(previewUpdateTimer);
-    previewUpdateTimer = setTimeout(updatePreview, 80);
+    previewUpdateTimer = setTimeout(updatePreview, 180);
 }
 
 async function executeRenameUI(itemData) {
@@ -2178,9 +2244,10 @@ resizerPreview.onmousedown = (e) => {
 };
 previewConsoleResizer.onmousedown = (e) => {
     e.preventDefault();
+    if (!previewConsole.classList.contains("open")) return;
     isResizingPreviewConsole = true;
     startX = e.clientX;
-    startPreviewConsoleWidth = previewConsole.offsetWidth;
+    startPreviewConsoleWidth = previewConsole.offsetWidth || 280;
     startDragProtection();
 };
 document.addEventListener("mousemove", (e) => {
@@ -2196,13 +2263,13 @@ document.addEventListener("mousemove", (e) => {
             previewPane.style.flex = `${100 - editorLastPercent} ${100 - editorLastPercent} 0%`;
         }
     }
-    if (isResizingPreviewConsole) {
+    if (isResizingPreviewConsole && previewConsole.classList.contains("open")) {
         const dx = e.clientX - startX;
         const width = Math.max(
             160,
             Math.min(startPreviewConsoleWidth - dx, previewPane.clientWidth * 0.6),
         );
-        previewConsole.style.flexBasis = `${width}px`;
+        previewConsole.style.width = `${width}px`;
     }
 });
 window.addEventListener("mouseup", stopDragProtection);
@@ -2377,6 +2444,9 @@ if (previewConsoleBtn) {
             "aria-expanded",
             String(previewConsole.classList.contains("open")),
         );
+        if (previewConsole.classList.contains("open") && !previewConsole.style.width) {
+            previewConsole.style.width = "280px";
+        }
     };
 }
 if (previewConsoleClearBtn)
@@ -2419,6 +2489,29 @@ document.getElementById("btn-toggle-theme").onclick = () => {
     updatePreview();
 };
 document.getElementById("btn-open-help").onclick = openHelpDocument;
+document.getElementById("btn-run-code").onclick = executeEditorCode;
+const runPreviewButton = document.getElementById("btn-run-preview-console");
+
+if (runPreviewButton) {
+    runPreviewButton.onclick = () => {
+        updatePreview();
+
+        if (typeof previewConsole !== "undefined" && previewConsole) {
+            previewConsole.classList.add("open");
+        }
+
+        if (
+            typeof previewConsoleResizer !== "undefined" &&
+            previewConsoleResizer
+        ) {
+            previewConsoleResizer.style.display = "block";
+        }
+
+        if (typeof showStatusMessage === "function") {
+            showStatusMessage("ライブプレビューを実行しました");
+        }
+    };
+}
 document.getElementById("select-default-ext").onchange = (e) => {
     defaultExtension = e.target.value;
     updateInitialUntitledExtension(defaultExtension);
