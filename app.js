@@ -1,5 +1,5 @@
 // CB Editor version: update this value when releasing a new version.
-const APP_VERSION = "2.8.24";
+const APP_VERSION = "2.8.25";
 
 let tabs = [];
 let activeTabId = null;
@@ -1731,14 +1731,20 @@ async function updatePreview() {
         }
         const t = tabs.find((x) => x.id === activeTabId);
         if (!t) return;
-        if (/\.(html?|xhtml)$/i.test(t.name))
+        if (/\.(html?|xhtml)$/i.test(t.name)) {
+            // HTMLファイルの場合はテキスト用のスタイルを一切適用せずそのまま出力する
             previewFrame.srcdoc = await buildMergedPreview(t.handle, editor.value);
-        else if (/\.(md|markdown)$/i.test(t.name))
-            previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style>${renderMarkdown(editor.value)}`;
-        else if (!editor.value)
-            previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style>`;
-        else
-            previewFrame.srcdoc = `<style>${getTextPreviewStyles()}</style><div class="plain-text-preview">${escapeHtml(editor.value)}</div>`;
+        } else {
+            // HTML以外のファイル（Markdownやテキストなど）のみ、背景色設定用のスタイルを適用する
+            const style = `<style>${getTextPreviewStyles()}</style>`;
+            if (/\.(md|markdown)$/i.test(t.name)) {
+                previewFrame.srcdoc = `${style}${renderMarkdown(editor.value)}`;
+            } else if (!editor.value) {
+                previewFrame.srcdoc = style;
+            } else {
+                previewFrame.srcdoc = `${style}<div class="plain-text-preview">${escapeHtml(editor.value)}</div>`;
+            }
+        }
     } catch (e) {
         if (updateToken !== previewUpdateToken) return;
         previewFrame.srcdoc = `<pre style="padding:10px;color:#d32f2f;white-space:pre-wrap;">ライブプレビュー生成エラー: ${escapeHtml(e.message || String(e))}</pre>`;
@@ -2018,6 +2024,16 @@ async function buildMergedPreview(handle, source = null) {
             return `url("${await getLocalAssetUrl(h)}")`;
         },
     );
+    const lightModeResetCss = `<style id="cb-force-light-theme">
+      :root { color-scheme: light !important; }
+      html { background-color: #ffffff !important; color: #000000 !important; }
+    </style>`;
+
+    if (/<head\b[^>]*>/i.test(html)) {
+        html = html.replace(/<head\b[^>]*>/i, (tag) => `${tag}${lightModeResetCss}`);
+    } else {
+        html = lightModeResetCss + html;
+    }
     return injectLocalAssetBridge(html, await buildLocalAssetMap(files));
 }
 async function navigatePreview(href) {
